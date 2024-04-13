@@ -1,0 +1,209 @@
+---
+title: "Agrupamento em mapas"
+format: html
+editor: visual
+---
+
+## Objetivo
+
+Demonstrar como regionalizar um indicador e apresentá-lo em um mapa. Este tutorial se torna particularmente útil, uma vez que, na maioria das vezes, temos os shapes em escala municipal ou estadual e precisamos formar regionalizações distintas.
+
+## Código
+
+### Carregando os pacotes:
+
+```{r}
+library(tidyverse)
+library(sf)
+library(rmapshaper)
+library(leaflet)
+```
+
+### Carregando os dados:
+
+Carregaremos dois bancos de dados distintos:
+
+- ``` df ``` : Este banco de dados possui o nome dos municípios, o agrupamento a qual eles pertencem e outras variáveis que dizem respeito ao cálculo da cobertura do serviço de abastecimento de água e coleta de esgoto.
+
+- ``` shapes ``` : Possui os ```shapes``` referentes aos municípios do banco de dados. Estes dados são referentes ao pacote ```geobr```.
+
+```{r}
+load("data/export_df.RData")
+```
+
+### Nível municipal
+
+Primeiro organizamos o nosso banco de dados para que tenhamos os polígonos de cada um dos municípios, bem como o indicador referente a coleta de esgoto. Aqui não temos muito segredos, operações mais simples do ```tidyverse```:
+
+```{r}
+
+shapes <- shapes |>
+  filter(estado %in% "Bahia") |>
+  left_join(
+    df |>
+      select(
+        `Código do Município`,
+        estado,
+        Bloco,
+        `POP_TOT - População total do município do ano de referência (Fonte: IBGE):`,
+        `AG001 - População total atendida com abastecimento de água`,
+        `ES001 - População total atendida com esgotamento sanitário`
+      )
+  )
+
+```
+
+Criando a variável de abastecimento de água
+
+```{r}
+
+
+shapes <- shapes |>
+  mutate(abastecimento_agua = round(`AG001 - População total atendida com abastecimento de água`/ `POP_TOT - População total do município do ano de referência (Fonte: IBGE):`,2))
+
+
+```
+
+Criando o mapa: 
+
+```{r}
+# Labels:
+
+labels <- sprintf("<strong>%s</strong><br/>%g",
+                  shapes$name_mn,
+                  shapes$abastecimento_agua) %>% lapply(htmltools::HTML)
+
+
+# Create a continuous palette function
+
+df_colors <- df |>
+  mutate(
+    abastecimento_agua = round(
+      `AG001 - População total atendida com abastecimento de água` / `POP_TOT - População total do município do ano de referência (Fonte: IBGE):`,
+      2
+    )
+  ) |>
+  select(abastecimento_agua) |>
+  rename(value = 1)
+
+
+pal <- colorNumeric("RdBu",
+                      df_colors$value, n = 5)
+
+### nome para legenda:
+
+name_var <- "Cobertura do abastecimento"
+
+### Por tooltip e legenda
+
+shapes |>
+  leaflet() |>
+  addPolygons(
+    fillColor = ~pal(abastecimento_agua),
+    color = "",
+    weight = 1,
+    smoothFactor = 1,
+    opacity = 1,
+    fillOpacity = 0.5,
+    group = "Municipios",
+    label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto"
+    )
+  ) |>
+  addLegend(
+    "bottomright",
+    pal = pal,
+    values = ~abastecimento_agua,
+    title = name_var,
+    opacity = 1)
+
+```
+
+
+### Por região:
+
+Mas e se quisessemos fazer por Regiões? Tendo como insumo apenas os municípios. Aqui entra a dica que Icaro me passou:
+
+```{r}
+
+# Primeiro agrupamos os dados pelo indicador que queremos:
+
+value <- df |>
+  filter(estado %in% "Bahia") |>
+  filter(!is.na(`AG001 - População total atendida com abastecimento de água`)) |> 
+  group_by(Bloco) |>
+  summarise(
+    abastecimento_agua = round(
+      sum(`AG001 - População total atendida com abastecimento de água`) / 
+        sum(`POP_TOT - População total do município do ano de referência (Fonte: IBGE):`),
+      2
+    )
+  ) |>
+  rename(var = 2)
+
+# Aqui o truque
+
+## Primeiro agrupamentos pela variável que queremos regionalizar, 
+## Depois *st_combine* e por último e não obrigatório ms_simplify()
+
+shapes <- shapes |>
+  group_by(Bloco) |>
+  summarise(geom = st_combine(geometry)) |>
+  rmapshaper::ms_simplify() |>
+  left_join(value)
+
+```
+
+Reproduzindo o mapa: 
+
+```{r}
+# Labels:
+
+labels <- sprintf("<strong>%s</strong><br/>%g",
+                  shapes$Bloco,
+                  shapes$var) %>% lapply(htmltools::HTML)
+
+
+# Create a continuous palette function
+
+
+pal <- colorNumeric("RdBu",
+                      value$var, n = 5)
+
+### nome para legenda:
+
+name_var <- "Cobertura do abastecimento"
+
+### Por tooltip e legenda
+
+shapes |>
+  leaflet() |>
+  addPolygons(
+    fillColor = ~pal(var),
+    color = "",
+    weight = 1,
+    smoothFactor = 1,
+    opacity = 1,
+    fillOpacity = 0.5,
+    group = "Municipios",
+    label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto"
+    )
+  ) |>
+  addLegend(
+    "bottomright",
+    pal = pal,
+    values = ~var,
+    title = name_var,
+    opacity = 1)
+
+```
+
+
+É isto ai!
